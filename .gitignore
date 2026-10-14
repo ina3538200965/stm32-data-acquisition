@@ -1,0 +1,47 @@
+# ============ 构建产物 ============
+# 编译器/链接器输出，每台机器都不同，且能随时重新生成
+Objects/
+Listings/
+*.axf
+*.hex
+*.bin
+*.elf
+*.map
+*.lst
+*.htm
+*.o
+*.d
+*.crf
+*.dep
+*.build_log.htm
+
+# ============ Keil 个人配置 ============
+# .uvoptx  保存书签/断点/调试器窗口布局
+# .uvguix  保存 GUI 窗口位置，内含本机绝对路径和 Windows 用户名 -> 提交即泄露隐私
+*.uvoptx
+*.uvguix.*
+DebugConfig/
+EventRecorderStub.scvd
+*.scvd
+
+# ============ IDE / 编辑器 ============
+.vscode/
+.idea/
+*.uvmpw
+
+# ============ 本地文档与临时文件 ============
+# 本地文档
+# *.docx 是关键反而要留：私人资料（如作战清单）不该进公开仓库。
+# 如果哪天要把文档纳入版本管理，把下一行删掉即可。
+*.docx
+# Word 的编辑锁文件
+~$*.docx
+*.bak
+*.tmp
+*.exe
+.DS_Store
+
+# ============ 本机代理工作区 ============
+.workbuddy/
+
+# 注意：Project.uvprojx 必须提交 —— 它是工程结构本身（源文件清单 / 芯片型号 / IncludePath）

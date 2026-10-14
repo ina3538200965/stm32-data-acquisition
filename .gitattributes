@@ -1,0 +1,10 @@
+# 统一换行，避免 Windows(CRLF) / Linux(LF) 混用导致整文件 diff
+# C 源码保持 Keil 生态习惯的 CRLF 检出
+*.c    text eol=crlf
+*.h    text eol=crlf
+*.s    text eol=crlf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
