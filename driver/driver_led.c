@@ -3,7 +3,7 @@
   * @file    driver_led.c
   * @brief   On-board LED driver implementation for STM32F103C8 (Blue Pill)
   *
-  *          硬件事实（面试时可以把这段讲出来）：
+  *          硬件事实：
   *          - PC13 的输出能力很弱（与 RTC/TAMPER 共用，最大 3mA），所以只能
   *            工作在 GPIO_Mode_Out_OD 开漏模式，靠外部上拉 + 灌电流点亮 LED，
   *            不能用推挽直接往外灌。

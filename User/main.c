@@ -13,6 +13,7 @@
   */
 #include "app.h"
 
+
 /**
   * @brief  主函数
   * @param  None
@@ -21,7 +22,6 @@
 int main(void)
 {
     APP_Init();
-
     while (1)
     {
         APP_Task();

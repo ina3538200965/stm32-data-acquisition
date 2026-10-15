@@ -560,6 +560,26 @@
               <FileType>5</FileType>
               <FilePath>.\driver\driver_led.h</FilePath>
             </File>
+            <File>
+              <FileName>driver_adc.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\driver_adc.h</FilePath>
+            </File>
+            <File>
+              <FileName>driver_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\driver_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>driver_usart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\driver_usart.c</FilePath>
+            </File>
+            <File>
+              <FileName>driver_usart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\driver_usart.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

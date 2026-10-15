@@ -132,8 +132,12 @@ void PendSV_Handler(void)
   * @param  None
   * @retval None
   */
+/* 10 ms 节拍计数，定义在 app.c —— 中断里只做累加，不做任何耗时操作 */
+extern volatile uint32_t g_tick10ms;
+
 void SysTick_Handler(void)
 {
+    g_tick10ms++;
 }
 
 /******************************************************************************/
