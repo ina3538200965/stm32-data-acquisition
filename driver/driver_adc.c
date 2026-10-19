@@ -61,7 +61,11 @@ void DRV_ADC_Init(void)
     gpio.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOA, &gpio);
 
-    /* ---- 4. TIM3 时基：10 ms 溢出一次 ---- */
+    /* ---- 4. TIM3 时基 ----
+       正常：PSC=719 / ARR=999 -> 72M / 720 / 1000 = 100 Hz（10 ms/轮）
+       压力测试（D3 验收用，测完记得改回来）：
+              PSC=71  / ARR=99  -> 72M / 72  / 100  = 10000 Hz（0.1 ms/轮）
+       10 kHz 下三通道采样 3 x 21 us = 63 us < 100 us 周期，够用。 */
     tim.TIM_Prescaler     = 719;                 /* 720 - 1 */
     tim.TIM_Period        = 999;                 /* 1000 - 1 */
     tim.TIM_ClockDivision = TIM_CKD_DIV1;
