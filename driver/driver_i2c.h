@@ -47,4 +47,16 @@ uint8_t DRV_I2C_ReadReg(uint8_t devAddr, uint8_t regAddr, uint8_t *pData);
  */
 uint8_t DRV_I2C_ReadMulti(uint8_t devAddr, uint8_t regAddr, uint8_t *pBuf, uint16_t len);
 
+/**
+ * @brief  从"控制字节"开始连续写多个字节
+ * @param  devAddr  7 位器件地址
+ * @param  ctrl     第一个字节（SSD1306 用 0x00 表示后面是命令、0x40 表示后面是显存数据）
+ * @param  pBuf     发送缓冲区
+ * @param  len      要写的字节数
+ * @retval 0 = 成功，非 0 = 失败
+ * @note   与 ReadMulti 对称。刷 OLED 整屏 1024 字节时，用这个只发一次起始条件，
+ *         比逐个 WriteReg 快三倍以上。
+ */
+uint8_t DRV_I2C_WriteMulti(uint8_t devAddr, uint8_t ctrl, uint8_t *pBuf, uint16_t len);
+
 #endif /* __DRIVER_I2C_H */

@@ -20,7 +20,7 @@
 
 /**
  * @brief  总线异常后的恢复：软件复位 I2C 外设
- * @note   这不是官方推荐做法，但 F1 的硬件 I2C 卡死时只有这一招最省事
+ * @note   当 F1 的硬件 I2C 卡死时直接复位
  */
 static void I2C_Recover(void)
 {
@@ -122,6 +122,33 @@ uint8_t DRV_I2C_WriteReg(uint8_t devAddr, uint8_t regAddr, uint8_t data)
 uint8_t DRV_I2C_ReadReg(uint8_t devAddr, uint8_t regAddr, uint8_t *pData)
 {
     return DRV_I2C_ReadMulti(devAddr, regAddr, pData, 1u);
+}
+
+uint8_t DRV_I2C_WriteMulti(uint8_t devAddr, uint8_t ctrl, uint8_t *pBuf, uint16_t len)
+{
+    uint16_t i;
+
+    if (I2C_WaitIdle()) { return 1u; }
+
+    /* 起始 + 地址（写方向）与 WriteReg 完全一致 */
+    I2C_GenerateSTART(I2C1, ENABLE);
+    if (I2C_WaitEvent(I2C_EVENT_MASTER_MODE_SELECT)) { return 2u; }
+
+    I2C_Send7bitAddress(I2C1, devAddr << 1, I2C_Direction_Transmitter);
+    if (I2C_WaitEvent(I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED)) { return 3u; }
+
+    /* 第一个字节：器件相关的控制/寄存器字节。之后硬件会自动接着发，不再发起始 */
+    I2C_SendData(I2C1, ctrl);
+    if (I2C_WaitEvent(I2C_EVENT_MASTER_BYTE_TRANSMITTED)) { return 4u; }
+
+    for (i = 0u; i < len; i++)
+    {
+        I2C_SendData(I2C1, pBuf[i]);
+        if (I2C_WaitEvent(I2C_EVENT_MASTER_BYTE_TRANSMITTED)) { return 5u; }
+    }
+
+    I2C_GenerateSTOP(I2C1, ENABLE);
+    return 0u;
 }
 
 uint8_t DRV_I2C_ReadMulti(uint8_t devAddr, uint8_t regAddr, uint8_t *pBuf, uint16_t len)

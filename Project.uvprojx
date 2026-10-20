@@ -600,6 +600,41 @@
               <FileType>5</FileType>
               <FilePath>.\driver\driver_mpu6500.h</FilePath>
             </File>
+            <File>
+              <FileName>driver_ssd1306.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\driver_ssd1306.c</FilePath>
+            </File>
+            <File>
+              <FileName>driver_ssd1306.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\driver_ssd1306.h</FilePath>
+            </File>
+            <File>
+              <FileName>driver_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\driver_spi.c</FilePath>
+            </File>
+            <File>
+              <FileName>driver_spi.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\driver_spi.h</FilePath>
+            </File>
+            <File>
+              <FileName>driver_w25q64.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\driver_w25q64.c</FilePath>
+            </File>
+            <File>
+              <FileName>driver_w25q64.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\driver_w25q64.h</FilePath>
+            </File>
+            <File>
+              <FileName>font6x8.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\font6x8.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
