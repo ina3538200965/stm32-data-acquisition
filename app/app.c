@@ -16,6 +16,7 @@
 #include "driver_mpu6500.h"
 #include "driver_ssd1306.h"
 #include "driver_w25q64.h"
+#include "protocol.h"
 #include "test_protocol.h"
 #include <stdio.h>
 
@@ -165,6 +166,102 @@ static void APP_OLED_Update(const uint16_t *avg, const uint16_t *rng)
     {
         s_oledRefreshErr++;
     }
+}
+
+/* ---- 协议帧上报（D6）---- */
+static uint32_t s_frameTxCount = 0u;   /* 已发出的帧数，D10 与上位机对账用 */
+static uint32_t s_framePackErr = 0u;   /* 组帧失败次数，正常情况下应恒为 0 */
+
+/*
+ * ADC 帧自己的序号：每发一帧 +1，跟采样轮数分开。
+ * 之前直接拿 g_adcRoundCount 当 seq，上位机就误判成每秒丢 99 帧 ——
+ * 因为 ADC 是 100Hz 采样、1Hz 上报，轮数每帧跳 100，不是跳 1。
+ * 序号的语义必须是「这是第几帧」，跟采样率解耦。
+ */
+static uint32_t s_adcFrameSeq = 0u;
+
+/* 是否发二进制协议帧。关掉就只剩 printf 文本，方便用串口助手看调试信息 */
+#define APP_SEND_BINARY     1u
+
+/**
+ * @brief  组一帧并发出去
+ * @note   一帧约 20 字节，115200 下约 1.7 ms，是阻塞的。
+ *         每秒 2 帧 ≈ 3.4 ms，占 0.34% CPU，可接受。
+ *         真要高频上报就得改 DMA 发送（D7 之后的事）。
+ */
+static void APP_SendFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
+{
+    uint8_t  buf[PROTO_FRAME_MAX_LEN];
+    uint16_t n;
+
+    n = PROTO_Pack(cmd, payload, len, buf, (uint16_t)sizeof(buf));
+    if (n == 0u)
+    {
+        s_framePackErr++;
+        return;
+    }
+
+    DRV_USART_SendBuf(buf, n);
+    s_frameTxCount++;
+}
+
+/* 小端拼接：低字节在前。上位机 Python 用 struct.unpack('<H'...) 对应 */
+static void APP_PutU16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+
+static void APP_PutU32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)( v        & 0xFFu);
+    p[1] = (uint8_t)((v >>  8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+
+/**
+ * @brief  上报三路 ADC
+ * @note   payload 里同时带两个序号，各管一件事：
+ *           seq   = 这是第几个 ADC 帧，每发一帧 +1。上位机靠它查丢帧（跳号即丢）。
+ *           round = 累计采样轮数（100Hz）。上位机靠它反推真实采样率：
+ *                   采样率 = 两帧 round 之差 / 两帧时间差。
+ *         两个不能混用 —— 拿 round 当 seq 会因为「100 轮才上报一次」
+ *         被误算成每秒丢 99 帧。
+ */
+static void APP_SendAdcFrame(const uint16_t *avg)
+{
+    uint8_t p[14];
+
+    APP_PutU32(&p[0],  s_adcFrameSeq);
+    APP_PutU32(&p[4],  (uint32_t)g_adcRoundCount);
+    APP_PutU16(&p[8],  avg[0]);
+    APP_PutU16(&p[10], avg[1]);
+    APP_PutU16(&p[12], avg[2]);
+
+    APP_SendFrame(CMD_ADC_DATA, p, (uint8_t)sizeof(p));
+
+    /* 序号无条件递增：组帧失败时帧根本没发出去，上位机也收不到，
+       此时"跳号"反映的正是真实的异常，不该被掩盖 */
+    s_adcFrameSeq++;
+}
+
+/**
+ * @brief  上报六轴 + 温度
+ */
+static void APP_SendMpuFrame(void)
+{
+    uint8_t p[14];
+
+    APP_PutU16(&p[0],  (uint16_t)s_mpu.accelX);
+    APP_PutU16(&p[2],  (uint16_t)s_mpu.accelY);
+    APP_PutU16(&p[4],  (uint16_t)s_mpu.accelZ);
+    APP_PutU16(&p[6],  (uint16_t)s_mpu.gyroX);
+    APP_PutU16(&p[8],  (uint16_t)s_mpu.gyroY);
+    APP_PutU16(&p[10], (uint16_t)s_mpu.gyroZ);
+    APP_PutU16(&p[12], (uint16_t)s_mpu.tempRaw);
+
+    APP_SendFrame(CMD_MPU_DATA, p, (uint8_t)sizeof(p));
 }
 
 /**
@@ -379,12 +476,14 @@ void APP_Task(void)
         }
 
         /* avg = 该秒平均（去噪后的稳定值），rng = 该秒波动跨度（衡量噪声） */
-        printf("[1s] idle=%lu rounds=%lu | CH0 %4u r%3u | CH1 %4u r%3u | CH2 %4u r%3u | tot=%lu\r\n",
+        /* f = 已发协议帧数，e = 组帧失败数（正常应恒为 0） */
+        printf("[1s] idle=%lu rounds=%lu | CH0 %4u r%3u | CH1 %4u r%3u | CH2 %4u r%3u | tot=%lu | f=%lu e=%lu\r\n",
                s_idleCount, roundsPerSec,
                avg[0], rng[0],
                avg[1], rng[1],
                avg[2], rng[2],
-               g_adcRoundCount);
+               g_adcRoundCount,
+               s_frameTxCount, s_framePackErr);
 
         /* MPU6500 单独一行，避免把上面那行撑得太长 */
         if (s_mpuOK)
@@ -399,6 +498,16 @@ void APP_Task(void)
 
         s_idleCount = 0;
         APP_ResetWindow();
+
+        /* 发二进制协议帧。放在 idle 清零之后，和 OLED 一样不污染占用率统计 */
+        if (APP_SEND_BINARY)
+        {
+            APP_SendAdcFrame(avg);
+            if (s_mpuOK)
+            {
+                APP_SendMpuFrame();
+            }
+        }
 
         /* OLED 放在 idle 清零之后刷新：这样刷屏耗时不会算进空闲计数，
            不污染 D3 那套 CPU 占用率的测量口径。
