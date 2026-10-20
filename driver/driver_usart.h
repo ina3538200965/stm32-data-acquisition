@@ -19,4 +19,13 @@
  */
 void DRV_USART_Init(void);
 
+/**
+ * @brief  发送一段原始字节（发二进制协议帧用，不走 printf 格式化）
+ * @param  buf  数据首地址
+ * @param  len  字节数
+ * @note   阻塞式：115200 下每字节约 87 µs，一帧 20 字节约 1.7 ms。
+ *         这个耗时必须心里有数 —— 帧发得多的话要考虑改成 DMA 发送。
+ */
+void DRV_USART_SendBuf(const uint8_t *buf, uint16_t len);
+
 #endif /* __DRIVER_USART_H */

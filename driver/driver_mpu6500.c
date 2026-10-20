@@ -50,7 +50,8 @@ static uint8_t s_calibrated = 0u;
 /* 校准采样数。传感器输出率 100 Hz，每次间隔 11 ms，50 次约 0.55 秒 */
 #define MPU6500_CAL_SAMPLES     50u
 
-uint8_t DRV_MPU6500_Calibrate(void)
+/* 陀螺仪零偏校准 */
+uint8_t DRV_MPU6500_Calibrate(void)  /* 陀螺仪零偏校准 */
 {
     MPU6500_Data_t d;
     int32_t sumX = 0;

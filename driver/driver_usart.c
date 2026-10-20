@@ -50,6 +50,31 @@ void DRV_USART_Init(void)
 }
 
 /**
+ * @brief  发送一段原始字节
+ * @note   顺序是"先写再等"：写 DR 后硬件把数据搬进移位寄存器时 TXE 会置 1，
+ *         等到 TXE=1 就说明可以写下一个字节了。
+ *         上一个字节实际还在往外发，但那不影响 —— TXE 保证的是 DR 已空。
+ */
+void DRV_USART_SendBuf(const uint8_t *buf, uint16_t len)
+{
+    uint16_t i;
+
+    if (buf == 0)
+    {
+        return;
+    }
+
+    for (i = 0u; i < len; i++)
+    {
+        USART_SendData(USART1, buf[i]);
+        while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET)
+        {
+            /* 等这个字节进入移位寄存器 */
+        }
+    }
+}
+
+/**
  * @brief  printf 重定向：让 printf 走 USART1
  * @note   只有勾选了 MicroLIB，printf 才会调用这个 fputc
  * @retval 返回写入的字符
