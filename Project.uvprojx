@@ -581,6 +581,16 @@
               <FilePath>.\driver\driver_usart.h</FilePath>
             </File>
             <File>
+              <FileName>ringbuf.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\driver\ringbuf.c</FilePath>
+            </File>
+            <File>
+              <FileName>ringbuf.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\driver\ringbuf.h</FilePath>
+            </File>
+            <File>
               <FileName>driver_i2c.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\driver\driver_i2c.c</FilePath>
@@ -689,6 +699,26 @@
               <FileName>test_protocol.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\test\test_protocol.h</FilePath>
+            </File>
+            <File>
+              <FileName>test_ringbuf.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\test\test_ringbuf.c</FilePath>
+            </File>
+            <File>
+              <FileName>test_ringbuf.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\test\test_ringbuf.h</FilePath>
+            </File>
+            <File>
+              <FileName>test_pipeline.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\test\test_pipeline.c</FilePath>
+            </File>
+            <File>
+              <FileName>test_pipeline.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\test\test_pipeline.h</FilePath>
             </File>
           </Files>
         </Group>
