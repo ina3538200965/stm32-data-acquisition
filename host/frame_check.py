@@ -29,10 +29,26 @@ CMD_ADC_DATA = 0x01
 CMD_MPU_DATA = 0x02
 CMD_STATUS = 0x03
 
+# 0x10~0x1F：上位机下发给 MCU 的命令
+CMD_SET_RATE = 0x10
+CMD_GET_INFO = 0x11
+CMD_ACK = 0x7F
+
 CMD_NAME = {
     CMD_ADC_DATA: "ADC",
     CMD_MPU_DATA: "MPU",
     CMD_STATUS: "STATUS",
+    CMD_SET_RATE: "SET_RATE",
+    CMD_GET_INFO: "GET_INFO",
+    CMD_ACK: "ACK",
+}
+
+# ACK payload 里的 result 字段含义
+ACK_RESULT = {
+    0: "OK",
+    1: "payload 太短",
+    2: "参数越界",
+    3: "未知命令",
 }
 
 
@@ -89,6 +105,35 @@ def parse_payload(cmd, p):
                 % (ax, ay, az, gx, gy, gz, temp_c))
 
     return "raw=%s" % " ".join("%02X" % b for b in p)
+
+
+def parse_ack(p):
+    """解析 ACK 帧的 payload：[0]=原命令字 [1]=结果 [2:]=数据"""
+    if len(p) < 2:
+        return "ACK 太短（%u 字节）" % len(p)
+
+    echo = p[0]
+    res = p[1]
+    name = CMD_NAME.get(echo, "CMD_%02X" % echo)
+
+    if res != 0:
+        return "应答 %-8s 失败：%s(%u)" % (name, ACK_RESULT.get(res, "?"), res)
+
+    if echo == CMD_GET_INFO and len(p) >= 30:
+        # GET_INFO 的数据区整体后移 2 字节，全部小端
+        return ("INFO ver=%u bin=%u | rounds=%u tx=%u period=%ums | "
+                "rx=%u peak=%u ovf=%u crc=%u eof=%u | "
+                "mpu=%u oled=%u flash=%u ore=%u"
+                % (p[2], p[3],
+                   u32(p, 4), u32(p, 8), u16(p, 12) * 10,
+                   u16(p, 14), u16(p, 16), u32(p, 18),
+                   u16(p, 22), u16(p, 24),
+                   p[26], p[27], p[28], p[29]))
+
+    if echo == CMD_SET_RATE and len(p) >= 4:
+        return "RATE 上报周期已改为 %u ms" % u16(p, 2)
+
+    return "应答 %-8s OK（%u 字节数据）" % (name, len(p) - 2)
 
 
 def scan_frames(buf):

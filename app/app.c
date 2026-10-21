@@ -18,6 +18,8 @@
 #include "driver_w25q64.h"
 #include "protocol.h"
 #include "test_protocol.h"
+#include "test_ringbuf.h"
+#include "test_pipeline.h"
 #include <stdio.h>
 
 /* 每轮都打印会让 printf 主导 CPU 占用（100 行/秒 ≈ 26%），测 D3 占用率时看不到
@@ -180,6 +182,21 @@ static uint32_t s_framePackErr = 0u;   /* 组帧失败次数，正常情况下�
  */
 static uint32_t s_adcFrameSeq = 0u;
 
+/* ---- 下行命令通道（D7）----
+   接收侧已经由 driver_usart 用 DMA + 环形缓冲自动收好了，
+   这里只管"取出来 -> 喂状态机 -> 执行 -> 应答"。
+   各个错误计数分开统计，是为了让上位机能一眼看出问题出在哪一类。 */
+static PROTO_Parser_t s_rxParser;
+static PROTO_Frame_t  s_rxFrame;
+static uint32_t s_rxFrameCount = 0u;    /* 收到的完整下行帧数 */
+static uint32_t s_rxCrcErr     = 0u;    /* CRC 校验失败：链路质量问题 */
+static uint32_t s_rxEofErr     = 0u;    /* 帧尾不对：同步错位 */
+static uint32_t s_rxLenErr     = 0u;    /* LEN 超长：收到了乱数据 */
+static uint32_t s_rxUnknownCmd = 0u;    /* 命令字不认识 */
+
+/* 上报周期，单位 tick(10 ms)。默认 100 = 1 秒，可被 CMD_SET_RATE 改 */
+static uint16_t s_reportTicks = 100u;
+
 /* 是否发二进制协议帧。关掉就只剩 printf 文本，方便用串口助手看调试信息 */
 #define APP_SEND_BINARY     1u
 
@@ -262,6 +279,186 @@ static void APP_SendMpuFrame(void)
     APP_PutU16(&p[12], (uint16_t)s_mpu.tempRaw);
 
     APP_SendFrame(CMD_MPU_DATA, p, (uint8_t)sizeof(p));
+}
+
+/**
+ * @brief  发一个通用应答帧
+ * @param  echoCmd  被应答的命令字，上位机靠它对上号
+ * @param  result   0 = 成功；1 = payload 太短；2 = 参数越界；3 = 未知命令
+ * @param  data     附加数据，可为 NULL
+ * @param  len      附加数据长度（最多 30，要给前面两字节留位置）
+ * @retval None
+ * @note   ACK 的 payload 统一是：[0] = 原命令字，[1] = 结果，[2..] = 附加数据。
+ *         上位机只看第 0 字节就知道这是回应哪条命令。
+ */
+static void APP_SendAck(uint8_t echoCmd, uint8_t result,
+                        const uint8_t *data, uint8_t len)
+{
+    uint8_t p[PROTO_MAX_PAYLOAD];
+    uint8_t i;
+
+    if (len > (uint8_t)(PROTO_MAX_PAYLOAD - 2u))
+    {
+        len = (uint8_t)(PROTO_MAX_PAYLOAD - 2u);
+    }
+
+    p[0] = echoCmd;
+    p[1] = result;
+
+    if (data != 0)
+    {
+        for (i = 0u; i < len; i++)
+        {
+            p[2u + i] = data[i];
+        }
+    }
+
+    APP_SendFrame(CMD_ACK, p, (uint8_t)(len + 2u));
+}
+
+/**
+ * @brief  CMD_GET_INFO：回报系统运行状态，供上位机对账
+ * @param  None
+ * @retval None
+ * @note   payload 28 字节，全是小端。这份数据相当于系统的"体检报告"，
+ *         上位机可据此判断有没有丢帧、缓冲有没有溢出、哪些外设掉线了。
+ */
+static void APP_CmdGetInfo(void)
+{
+    DRV_USART_RxStat_t rxStat;
+    uint8_t p[28];
+    uint8_t i;
+
+    DRV_USART_RxGetStat(&rxStat);
+
+    for (i = 0u; i < (uint8_t)sizeof(p); i++)
+    {
+        p[i] = 0u;
+    }
+
+    p[0] = 1u;                                  /* 协议版本 */
+    p[1] = (uint8_t)APP_SEND_BINARY;            /* 是否在发二进制帧 */
+
+    APP_PutU32(&p[2],  (uint32_t)g_adcRoundCount);  /* 累计采样轮数 */
+    APP_PutU32(&p[6],  s_frameTxCount);             /* 已发出的上报帧数 */
+    APP_PutU16(&p[10], s_reportTicks);              /* 当前上报周期(tick) */
+    APP_PutU16(&p[12], (uint16_t)s_rxFrameCount);   /* 下行收到的帧数 */
+    APP_PutU16(&p[14], rxStat.ringPeak);            /* 环形缓冲历史峰值 */
+    APP_PutU32(&p[16], rxStat.ringOverflow);        /* 环形缓冲溢出字节数 */
+    APP_PutU16(&p[20], (uint16_t)s_rxCrcErr);
+    APP_PutU16(&p[22], (uint16_t)s_rxEofErr);
+
+    p[24] = s_mpuOK;
+    p[25] = s_oledOK;
+    p[26] = s_flashOK;
+    p[27] = (uint8_t)rxStat.hwOverrun;
+
+    APP_SendAck(CMD_GET_INFO, 0u, p, (uint8_t)sizeof(p));
+}
+
+/**
+ * @brief  CMD_SET_RATE：改上报周期
+ * @param  payload  载荷，[0..1] = uint16 毫秒数
+ * @param  len      载荷长度
+ * @retval None
+ * @note   限死在 100 ~ 60000 ms：再快会把串口堵死（每帧约 1.7 ms），
+ *         再慢没意义。设置成功时把**实际生效的值**回给上位机，
+ *         这样上位机不用猜取整过了没有。
+ */
+static void APP_CmdSetRate(const uint8_t *payload, uint8_t len)
+{
+    uint16_t ms;
+    uint8_t  ack[2];
+
+    if (len < 2u)
+    {
+        APP_SendAck(CMD_SET_RATE, 1u, 0, 0u);       /* 1 = payload 太短 */
+        return;
+    }
+
+    ms = (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+
+    if ((ms < 100u) || (ms > 60000u))
+    {
+        APP_SendAck(CMD_SET_RATE, 2u, 0, 0u);       /* 2 = 超出允许范围 */
+        return;
+    }
+
+    s_reportTicks = (uint16_t)(ms / 10u);
+
+    ack[0] = (uint8_t)(ms & 0xFFu);
+    ack[1] = (uint8_t)(ms >> 8);
+    APP_SendAck(CMD_SET_RATE, 0u, ack, 2u);
+}
+
+/**
+ * @brief  收到一条完整下行帧后的分发
+ * @param  frame  解出来的帧
+ * @retval None
+ */
+static void APP_OnRxFrame(const PROTO_Frame_t *frame)
+{
+    switch (frame->cmd)
+    {
+        case CMD_SET_RATE:
+            APP_CmdSetRate(frame->payload, frame->len);
+            break;
+
+        case CMD_GET_INFO:
+            APP_CmdGetInfo();
+            break;
+
+        default:
+            s_rxUnknownCmd++;
+            APP_SendAck(frame->cmd, 3u, 0, 0u);     /* 3 = 不认识这条命令 */
+            break;
+    }
+}
+
+/**
+ * @brief  把环形缓冲里攒的数据取出来喂给协议状态机
+ * @param  None
+ * @retval None
+ * @note   这里是"分包 / 粘包"被处理干净的关键：
+ *         一次 read 拿到的字节数完全是随机的 ——
+ *         可能只有半帧（状态机会停在半路，等下一次数据接着收），
+ *         也可能一次带着两三帧（状态机会连续吐出多个 OK）。
+ *         因为是逐字节喂的，这两种情况都不需要额外代码，天生支持。
+ */
+static void APP_HandleRx(void)
+{
+    uint8_t  buf[32];
+    uint16_t n;
+    uint16_t i;
+
+    n = DRV_USART_RxRead(buf, (uint16_t)sizeof(buf));
+
+    for (i = 0u; i < n; i++)
+    {
+        PROTO_Status_t st = PROTO_Feed(&s_rxParser, buf[i], &s_rxFrame);
+
+        if (st == PROTO_OK)
+        {
+            s_rxFrameCount++;
+            APP_OnRxFrame(&s_rxFrame);
+        }
+        else if (st == PROTO_ERR_CRC)
+        {
+            s_rxCrcErr++;
+        }
+        else if (st == PROTO_ERR_EOF)
+        {
+            s_rxEofErr++;
+        }
+        else if (st == PROTO_ERR_LEN)
+        {
+            s_rxLenErr++;
+        }
+        else
+        {
+            /* PROTO_BUSY：帧还没收完，什么都不用做，继续喂下一个字节 */
+        }
+    }
 }
 
 /**
@@ -403,8 +600,15 @@ void APP_Init(void)
         printf("[flash] init failed, err=%u\r\n", s_flashErr);
     }
 
-    /* 4. 上电自测：协议层不依赖硬件，可以先跑一遍 */
-    s_selfTestFailures = TEST_Protocol_Run();
+    /* 4. 上电自测：protocol 和 ringbuf 这两层都不依赖硬件，开机先跑一遍。
+          环形缓冲的回绕、刚好填满、溢出这些边界，跑一遍测试比事后 debug 便宜多了 */
+    s_selfTestFailures  = TEST_Protocol_Run();
+    s_selfTestFailures += TEST_RingBuf_Run();
+    s_selfTestFailures += TEST_Pipeline_Run();
+
+    /* 下行解析器复位到初始状态，准备接上位机命令 */
+    PROTO_ParserInit(&s_rxParser);
+
     printf("boot ok, selftest fail=%u\r\n", s_selfTestFailures);
 
     /* 5. SysTick 10 ms 节拍，用于 1 秒统计上报。
@@ -418,6 +622,11 @@ void APP_Task(void)
 {
     /* 空闲计数：这一行就是 D3 的 CPU 占用率基准 */
     s_idleCount++;
+
+    /* 处理上位机下发的命令。数据已经被 DMA + 环形缓冲自动收好了，
+       这里只负责取出来解析和应答。放在主循环里做，绝不能放进中断 ——
+       应答要发串口，是毫秒级的阻塞操作。 */
+    APP_HandleRx();
 
     /* 一整轮采样完成 */
     if (g_adcConvFlag)
@@ -458,8 +667,8 @@ void APP_Task(void)
 #endif
     }
 
-    /* 每 100 个节拍 = 1 秒，上报一次统计 */
-    if (g_tick10ms - s_lastTick >= 100u)
+    /* 每 s_reportTicks 个节拍上报一次统计（默认 100 = 1 秒，可被上位机改） */
+    if (g_tick10ms - s_lastTick >= s_reportTicks)
     {
         uint32_t roundsPerSec = g_adcRoundCount - s_lastRound;
         uint16_t avg[ADC_CH_NUM];
@@ -494,6 +703,29 @@ void APP_Task(void)
                    s_mpu.gyroX,  s_mpu.gyroY,  s_mpu.gyroZ,
                    DRV_MPU6500_RawToCelsius(s_mpu.tempRaw),
                    s_mpuReadErr);
+        }
+
+        /* 只要 DMA 搬过字节就打印 —— 收不到帧的时候也得有线索可查。
+           看第一行就能定位问题在哪一层：
+             dma=0            RX 引脚上根本没数据 -> 接线 / 程序没下载
+             dma>0 frame=0    收到字节了但解不出帧 -> 波特率或协议对不上
+             dma>0 frame>0    正常
+           peak 是环形缓冲历史峰值，ovf 是溢出字节数，这两个不为 0 说明
+           主循环消费得太慢了。 */
+        {
+            DRV_USART_RxStat_t rxStat;
+
+            DRV_USART_RxGetStat(&rxStat);
+            if (rxStat.dmaBytes > 0u)
+            {
+                printf("[rx] dma=%lu frame=%lu crc=%lu eof=%lu len=%lu unk=%lu | "
+                       "idle=%lu ht=%lu tc=%lu peak=%u ovf=%lu ore=%lu\r\n",
+                       rxStat.dmaBytes,
+                       s_rxFrameCount, s_rxCrcErr, s_rxEofErr,
+                       s_rxLenErr, s_rxUnknownCmd,
+                       rxStat.idleCount, rxStat.dmaHtCount, rxStat.dmaTcCount,
+                       rxStat.ringPeak, rxStat.ringOverflow, rxStat.hwOverrun);
+            }
         }
 
         s_idleCount = 0;
