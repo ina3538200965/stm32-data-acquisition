@@ -40,15 +40,354 @@
 - 读数固定在 2100 附近不动（悬空典型电平）→ 抽头这根线没接上
 - 读数跳变不连续 → 电位器内部接触不良（常见于便宜的碳膜电位器）
 
-## 引脚分配
+## 外设连线详情
 
-| 引脚 | 用途 | 备注 |
+> 本节是**全项目接线唯一的权威说明**，照此可直接复现整套硬件。
+> 后面各 D 阶段记录里也有局部接线表，那些是为了讲"为什么这样接"，
+> 引脚编号一律以本节为准，如有出入以本节为准。
+
+### 1. 引脚总表
+
+主控 LQFP48 封装（STM32F103C8T6），板上已用 17 个引脚。
+
+| MCU 引脚 | 接到哪 | 信号方向 | GPIO 模式（代码实际配置） | 5 V 容忍 | 说明 |
+|---|---|---|---|---|---|
+| PA0 | 光敏模块 AO | 输入 | `GPIO_Mode_AIN` | 否 | ADC1_IN0，规则组 rank 1 |
+| PA1 | 热敏模块 AO | 输入 | `GPIO_Mode_AIN` | 否 | ADC1_IN1，rank 2 |
+| PA2 | 电位器中间抽头 | 输入 | `GPIO_Mode_AIN` | 否 | ADC1_IN2，rank 3 |
+| PA4 | W25Q64 CS | 输出 | `GPIO_Mode_Out_PP` 50 MHz | 否 | **软件片选**，非硬件 NSS |
+| PA5 | W25Q64 CLK | 输出 | `GPIO_Mode_AF_PP` 50 MHz | 否 | SPI1_SCK |
+| PA6 | W25Q64 DO | 输入 | `GPIO_Mode_AF_PP` 50 MHz | 否 | SPI1_MISO |
+| PA7 | W25Q64 DI | 输出 | `GPIO_Mode_AF_PP` 50 MHz | 否 | SPI1_MOSI |
+| PA8 | 采样打点（可悬空） | 输出 | `GPIO_Mode_Out_PP` 50 MHz | 是 | 每轮翻转，相邻上升沿 = 20 ms |
+| PA9 | CH340 RXD | 输出 | `GPIO_Mode_AF_PP` 50 MHz | 是 | USART1_TX |
+| PA10 | CH340 TXD | 输入 | `GPIO_Mode_IN_Floating` | 是 | USART1_RX |
+| PA13 | ST-Link SWDIO | 双向 | 复位默认（SWD） | 是 | 不要复用为普通 IO |
+| PA14 | ST-Link SWCLK | 输入 | 复位默认（SWD） | 是 | 不要复用为普通 IO |
+| PB6 | MPU6500 SCL + OLED SCL | 双向 | `GPIO_Mode_AF_OD` 50 MHz | 是 | I2C1_SCL，两器件并联 |
+| PB7 | MPU6500 SDA + OLED SDA | 双向 | `GPIO_Mode_AF_OD` 50 MHz | 是 | I2C1_SDA，两器件并联 |
+| PC13 | 板载 LED | 输出 | `GPIO_Mode_Out_OD` 2 MHz | 否 | 开漏，只能灌电流 |
+| NRST | 复位按键 / ST-Link RST | 输入 | 复位默认 | 否 | 板上已有上拉和按键 |
+| BOOT0 | 板载跳线帽 | 输入 | — | 否 | 见第 2 节跳线说明 |
+
+**"5 V 容忍"这一列是硬约束**：标"否"的引脚是 TTa 型（模拟/普通），
+直接接 5 V 会经由内部 ESD 二极管灌电流，轻则读数漂移，重则烧引脚。
+PA0~PA7、PC13、NRST、BOOT0 都在此列；PA8~PA15、PB6、PB7 是 FT 型，能扛 5 V。
+（以数据手册 Table 5 "Pin definitions" 为准。）
+
+### 2. 电源与地
+
+三个供电来源，**必须共地**，否则 ADC 读数乱飘、串口出乱码。
+
+| 来源 | 接到哪 | 说明 |
 |---|---|---|
-| PA0 / PA1 / PA2 | ADC 通道 0 / 1 / 2 | 只能承受 3.3 V |
-| PA8 | 采样打点翻转输出 | 每轮翻一次，相邻上升沿 = 20 ms |
-| PA9 / PA10 | USART1 TX / RX | 与 CH340 交叉接：模块 TXD → PA10，RXD → PA9 |
-| PA13 / PA14 | SWDIO / SWCLK（下载） | 不要复用 |
-| PC13 | 板载 LED |  |
+| ST-Link 3.3 V | 开发板 3.3 V | 整套系统的主电源 |
+| ST-Link GND | 开发板 GND | **必接**，否则 SWD 都连不上 |
+| CH340 VCC | 开发板 5 V（推荐）或 3.3 V | 见下方警告 |
+| CH340 GND | 开发板 GND | **必接**，这是最常见的乱码根因 |
+| 各传感器模块 VCC | 开发板 3.3 V | **绝对不要接 5 V** |
+| 各传感器模块 GND | 开发板 GND | 全部并到同一条 GND |
+
+**五个电源相关的坑**：
+
+1. **CH340 的 VCC 不要既接 5 V 又把它自己的 3.3 V 输出脚接到板子的 3.3 V**。
+   两个稳压输出顶在一起，轻则发热，重则烧掉其中一个。**只取一路**。
+2. **CH340 若用 5 V 供电，它的 TXD 输出是 5 V 电平**。PA10 是 FT 型能扛，
+   但这属于"能用不推荐"——最好把模块上的跳线改成 3.3 V，或直接用 3.3 V 版模块。
+3. **面包板的两条电源轨通常是断开的**（中间有缺口）。跨半区接线时要手动短接，
+   否则"明明测到 3.3 V 但模块没电"。用万用表在模块的 VCC 脚上量，别在电源轨上量。
+4. **ST-Link 的 3.3 V 输出能力有限**（一般 100~200 mA）。本系统实测总电流约 55~60 mA：
+
+   | 部件 | 典型电流 |
+   |---|---|
+   | STM32F103C8T6 @ 72 MHz | 约 30 mA |
+   | OLED（约一半像素点亮） | 15~20 mA |
+   | MPU6500 | 3.5 mA |
+   | W25Q64（待机 / 擦写瞬时） | 4 µA / 15 mA |
+   | 光敏 + 热敏模块（含比较器） | 各 1~2 mA |
+   | 电位器（10 kΩ 分压） | 0.33 mA |
+   | 板载 LED（PC13 开漏灌入） | 约 3 mA |
+
+   余量够，但别再往 3.3 V 轨上挂电机、继电器、WS2812 这类大电流负载。
+5. **VBAT / VDD / VSS / VDDA / VSSA 不用管**。最小系统板上已经把去耦电容、
+   VDDA 滤波（10 µF + 100 nF）都做好并内部连好，外部只需提供一路 3.3 V。
+
+**BOOT0 跳线**：接 GND（或跳线帽置 0）= 从 Flash 启动，正常运行；
+接 3.3 V = 从系统存储器启动，用于串口 ISP 下载。
+本项目用 ST-Link 走 SWD 下载，**BOOT0 保持 0**。
+BOOT1 在 F103C8T6 上与 PB2 复用，板上多数直接拉低，不用管。
+
+### 3. ADC 三路模拟输入（PA0 / PA1 / PA2）
+
+| 引脚 | 传感器 | 模块接法 | ADC 配置 |
+|---|---|---|---|
+| PA0 | 光敏电阻模块 | VCC→3.3 V，GND→GND，**AO→PA0**（DO 悬空） | ADC1_IN0，rank 1，239.5 周期 |
+| PA1 | 热敏电阻 NTC 模块 | VCC→3.3 V，GND→GND，**AO→PA1**（DO 悬空） | ADC1_IN1，rank 2，239.5 周期 |
+| PA2 | 电位器（10 kΩ 直插） | **两端→3.3 V 和 GND，中间抽头→PA2** | ADC1_IN2，rank 3，239.5 周期 |
+
+**采样时间 239.5 周期不是随手选的**：ADCCLK = 12 MHz 时单次转换 = (239.5 + 12.5) / 12 MHz ≈ 21 µs。
+三通道合计约 63 µs，远小于 10 ms 的采样周期。采样时间取最大档，
+是因为光敏/热敏模块的输出阻抗偏高（kΩ 级），采样电容需要足够的充电时间，
+否则读数系统性偏小。**这是"读数总是偏低一点"的常见根因之一。**
+
+**DO 引脚必须悬空**：模块上的 DO 是比较器数字输出，接进来只会引入干扰，
+本项目全程用 AO 走 ADC。如果模块只有 3 个脚（VCC/GND/AO），忽略这条。
+
+### 4. 串口 USART1（PA9 / PA10）与 CH340
+
+| CH340 模块脚 | 接到 | 说明 |
+|---|---|---|
+| VCC | 开发板 5 V 或 3.3 V（**只取一路**） | 见第 2 节警告 |
+| GND | 开发板 GND | **必接** |
+| **TXD** | **PA10** | 模块发 → MCU 收 |
+| **RXD** | **PA9** | 模块收 → MCU 发 |
+| 3V3（若有输出脚） | **悬空** | 别和板子的 3.3 V 短接 |
+
+**必须交叉接**：模块 TXD 对 MCU RX，模块 RXD 对 MCU TX。
+同名相接（TXD 接 TXD）是最经典的"能通电但收不到任何数据"。
+
+串口参数（`driver_usart.c`）：**115200 / 8 数据位 / 1 停止位 / 无校验 / 无流控**。
+上位机 `monitor.py` 默认值和这里一致，改了一边另一边必须跟着改。
+
+**ST-Link 的 TX/RX 不要接**：ST-Link V2 的排针上也有 TX/RX 脚，
+如果同时把 ST-Link 的 TX 和 CH340 的 TXD 都接到 PA10，两个推挽输出会顶在一起。
+本项目只用 ST-Link 的 **SWDIO / SWCLK / GND / 3.3 V** 四根线，其余全部悬空。
+
+### 5. I2C1 总线（PB6 / PB7）：MPU6500 + OLED 共用
+
+一条总线挂两个从机，靠地址区分，硬件上就是简单并联。
+
+| 器件 | 模块脚 | 接到 | 地址 |
+|---|---|---|---|
+| MPU6500 | VCC（脚 1） | 3.3 V | — |
+| MPU6500 | GND（脚 2） | GND | — |
+| MPU6500 | SCL（脚 3） | **PB6** | — |
+| MPU6500 | SDA（脚 4） | **PB7** | — |
+| MPU6500 | AD0（脚 7） | **GND** | 接地 = **0x68**，接 VCC = 0x69 |
+| MPU6500 | EDA / ECL / INT / NCS / FSYNC（脚 5/6/8/9/10） | 全部悬空 | — |
+| OLED SSD1306 | GND（脚 1） | GND | — |
+| OLED SSD1306 | VCC（脚 2） | 3.3 V | — |
+| OLED SSD1306 | SCL（脚 3） | **PB6**（与 MPU6500 并联） | — |
+| OLED SSD1306 | SDA（脚 4） | **PB7**（与 MPU6500 并联） | — |
+
+**本模块实测 WHO_AM_I = 0x70，即 MPU6500（不是 9250，没有磁力计）**。
+若换成 MPU6050 则是 0x68，MPU9250 是 0x71 —— 三者地址和数据布局完全兼容，只有 ID 不同。
+
+**I2C 参数**（`driver_i2c.c`）：400 kHz 快速模式，`I2C_DutyCycle_2`，
+主机模式（`OwnAddress1 = 0x00`，主机自身地址无意义）。
+**引脚必须 `GPIO_Mode_AF_OD` 复用开漏**，I2C 是线与总线，配成推挽会短路。
+
+**两个地址常记混**：
+
+| 器件 | 7 位地址 | 写地址（地址左移 1 位） | 读地址（写地址 + 1） |
+|---|---|---|---|
+| MPU6500 | 0x68 | 0xD0 | 0xD1 |
+| SSD1306 | **0x3C** | 0x78 | 0x79 |
+
+OLED 少数模块是 0x3D（模块背面电阻决定）。`Init` 返回 1 就先改
+`driver_ssd1306.h` 里的 `SSD1306_ADDR` 试一遍。
+
+**MPU6500 是 10 脚模块的完整排列**，逐个脚都写在上表了；
+实际只需要接 4 根线（VCC / GND / SCL / SDA），AD0 落地选地址，
+剩下 5 个脚全悬空。
+
+### 6. SPI1（PA4~PA7）与 W25Q64
+
+| W25Q64 模块脚 | 名字 | 接到 | 说明 |
+|---|---|---|---|
+| 1 | VCC | 3.3 V | |
+| 2 | GND | GND | |
+| 3 | CS | **PA4** | 软件 GPIO 片选，非硬件 NSS |
+| 4 | CLK | **PA5** | SPI1_SCK |
+| 5 | DO | **PA6** | MISO：从机出 → 主机入 |
+| 6 | DI | **PA7** | MOSI：主机出 → 从机入 |
+| 7 | WP | 悬空 | 写保护，模块内部已上拉 |
+| 8 | HOLD | 悬空 | 暂停，模块内部已上拉 |
+
+**SPI 参数**（`driver_spi.c`）：主机模式、8 位数据、**模式 0**（`CPOL_Low` + `CPHA_1Edge`）、
+**MSB 先发**、**APB2 4 分频 = 18 MHz**、`NSS_Soft`。
+
+- **MISO / MOSI 接反是最常见的错**，现象是读回 `FF FF FF`（MISO 悬空时上拉成高电平）。
+- **模式 0 是 W25Q64 的要求**，配成模式 3（CPOL_High + CPHA_2Edge）会读到全 0 或乱码。
+- **18 MHz 是留了余量的**：W25Q64 标称支持 80 MHz，但面包板跳线的信号质量撑不到，
+  18 MHz 是"面包板能稳定跑"的稳妥值。
+- **片选必须用软件 GPIO**：一条 SPI 总线挂多个从机时，每个从机各有自己的 CS，
+  硬件 NSS 一根线只能管一个。
+
+### 7. LED 与采样打点（PC13 / PA8）
+
+| 引脚 | 用途 | 配置 | 说明 |
+|---|---|---|---|
+| PC13 | 板载 LED | `GPIO_Mode_Out_OD` 2 MHz | 低电平点亮，开漏只能灌电流 |
+| PA8 | 采样打点 | `GPIO_Mode_Out_PP` 50 MHz | 每轮翻转一次，方波周期 20 ms |
+
+**PC13 必须开漏**：这颗脚在芯片内部结构特殊（属于 TTa 型、驱动能力弱），
+配成推挽虽然多数板子也能亮，但官方推荐开漏灌电流，且不建议接超过 3 mA 的负载。
+
+**PA8 打点是给示波器用的**，接不接都不影响功能。
+用它可以把"TIM3 是不是真的 100 Hz"从软件计数变成硬件波形验证：
+
+```
+相邻上升沿间隔 = 20 ms  →  采样周期正确（100 Hz）
+```
+
+用逻辑分析仪或示波器量这一路，比看 `rounds=100` 更可信 ——
+软件计数只证明"主循环跑完了这么多轮"，不证明"定时器周期准"。
+
+### 8. 下载调试（PA13 / PA14）
+
+ST-Link 只需 4 根线，SWD 模式下其余脚全部不接：
+
+| ST-Link 脚 | 接到开发板 | 说明 |
+|---|---|---|
+| 3.3V | 3.3V | 供电（也可不接，用外部电源） |
+| GND | GND | **必接** |
+| SWDIO | **PA13** | 数据 |
+| SWCLK | **PA14** | 时钟 |
+| RST（可选） | NRST | 接上可让 Keil "Connect under Reset"，救回被误配的芯片 |
+
+**SWD 比 JTAG 省 3 根线**（JTAG 还要 JTDI/JTDO/NJTRST，即 PA15/PB3/PB4）。
+代价是这 5 个脚默认被调试口占用：**要用 PA15 / PB3 / PB4 做普通 IO，
+必须先调 `GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable, ENABLE)` 关掉 JTAG**。
+本项目没用到这三个脚，所以不需要这句。
+
+### 9. 一页速查：谁连谁
+
+接线时对着这段抄，不用翻上面的表格：
+
+```
+【模拟输入】
+  PA0   ←  光敏模块 AO          （DO 悬空）
+  PA1   ←  热敏模块 AO          （DO 悬空）
+  PA2   ←  电位器 ② 中间抽头     （① → 3.3 V，③ → GND）
+
+【SPI1 → W25Q64】
+  PA4   →  W25Q64 CS
+  PA5   →  W25Q64 CLK
+  PA6   ←  W25Q64 DO    (MISO)
+  PA7   →  W25Q64 DI    (MOSI)
+
+【USART1 ↔ CH340】
+  PA9   →  CH340 RXD
+  PA10  ←  CH340 TXD
+
+【I2C1 —— 两个器件并联在同一条总线上】
+  PB6   ↔  MPU6500 SCL  +  OLED SCL
+  PB7   ↔  MPU6500 SDA  +  OLED SDA
+
+【指示与调试】
+  PC13  →  板载 LED（低电平点亮）
+  PA8   →  打点输出（接示波器，可选）
+  PA13  ↔  ST-Link SWDIO
+  PA14  ←  ST-Link SWCLK
+
+【电源】
+  3.3 V →  MCU / 光敏 / 热敏 / 电位器① / MPU6500 / OLED / W25Q64
+  GND   →  以上全部 + CH340 GND + ST-Link GND（必须共地）
+  5 V   →  CH340 VCC（若模块是 5 V 版；3.3 V 版就接 3.3 V，只取一路）
+```
+
+### 9.1 系统连接图
+
+```mermaid
+flowchart LR
+    LDR["光敏模块<br/>AO"]
+    NTC["热敏模块<br/>AO"]
+    POT["电位器<br/>中间抽头"]
+
+    subgraph MCU["STM32F103C8T6 @ 72 MHz"]
+        direction TB
+        ADC["PA0 / PA1 / PA2<br/>ADC1_IN0~2"]
+        SPI["PA4~PA7<br/>SPI1"]
+        UART["PA9 / PA10<br/>USART1"]
+        I2C["PB6 / PB7<br/>I2C1"]
+        LED["PC13<br/>LED"]
+        TICK["PA8<br/>打点"]
+        SWD["PA13 / PA14<br/>SWD"]
+    end
+
+    LDR --> ADC
+    NTC --> ADC
+    POT --> ADC
+    ADC --> DMA["DMA1_Channel1<br/>Circular 循环搬运"]
+    DMA --> APP["主循环<br/>均值 / 极值 / 组帧"]
+
+    SPI <--> FLASH["W25Q64<br/>掉电存储"]
+    UART <--> CH340["CH340"]
+    CH340 <--> PC["上位机<br/>monitor.py"]
+    I2C <--> MPU["MPU6500<br/>0x68"]
+    I2C <--> OLED["SSD1306<br/>0x3C"]
+    TICK -.-> SCOPE["示波器<br/>可选"]
+    SWD <--> STLINK["ST-Link"]
+    STLINK <--> KEIL["Keil<br/>下载 / 调试"]
+
+    APP --> UART
+```
+
+图上能看出一条关键结构：**ADC 那条链路是多通道 + DMA + 定时器触发的组合，
+其余外设（SPI / I2C / UART）都是单总线单主机** —— 前者要处理"三路数据同时到"，
+后者只要处理好"一问一答"的时序。这是本项目里复杂度分布不均的根本原因。
+
+### 10. 未被使用的引脚（全部悬空）
+
+| 引脚 | 复位后的默认功能 | 备注 |
+|---|---|---|
+| PA3 | ADC1_IN3 / USART2_RX | 可扩第 4 路 ADC |
+| PA11 / PA12 | USB_DM / USB_DP | 本项目不用 USB |
+| PA15 | JTDI | 用前需关 JTAG |
+| PB0 / PB1 | ADC1_IN8 / IN9 | 可扩第 5、6 路 ADC |
+| PB2 | BOOT1 | 板上已处理 |
+| PB3 / PB4 | JTDO / NJTRST | 用前需关 JTAG |
+| PB5 | — | |
+| PB8 / PB9 | 可重映射为 I2C1 / 可做 TIM4 | |
+| PB10 / PB11 | I2C2 / USART3 | 可扩第二条 I2C |
+| PB12~PB15 | SPI2 | 可扩第二路 SPI |
+| PC14 / PC15 | OSC32_IN / OUT | 板上 32.768 kHz 晶振座 |
+
+**扩 6 路 ADC 是这个硬件天然支持的**：PA0~PA3 + PB0 + PB1 = ADC1_IN0~IN3、IN8、IN9，
+只要改 `ADC_RegularChannelConfig` 的 rank 和 `ADC_NbrOfChannel`
+以及 DMA 的 `BufferSize`，驱动的其余部分不用动。这是"驱动程序化"的直接好处。
+
+### 11. 搭建顺序与检查清单
+
+按这个顺序接，出问题时能快速定位是哪一步引入的：
+
+```
+1. 只接 ST-Link 四根线          → 能下载、能跑 LED 闪烁
+2. 接 CH340 三根线（TXD/RXD/GND）→ 串口助手里看到 printf 输出
+3. 接光敏 / 热敏 / 电位器        → [1s] 行的 CH0/CH1/CH2 有变化
+4. 接 MPU6500（4 根 + AD0）     → [mpu] ok, id=0x70
+5. 接 OLED（4 根，与 MPU 并联）  → [oled] ok，屏幕亮起
+6. 接 W25Q64（6 根）            → [flash] ok, prev boot=N
+```
+
+每加一步看一次串口，**别一次性全插上再排查**——
+六个模块 30 多根线，一起接完出问题就是六选一的盲猜。
+
+开机自检通过的样子（`selftest fail=0` 才说明三层单测全过）：
+
+```
+[mpu] ok, id=0x70
+[oled] ok
+[flash] ok, prev boot=2 prev adc=1435/2036/2099
+boot ok, selftest fail=0
+```
+
+### 12. 接线故障对照表
+
+| 现象 | 最可能的原因 | 怎么确认 |
+|---|---|---|
+| 三路 ADC 全部贴着 2100 左右不动 | 引脚悬空（采样电容残留电荷的典型电平） | 把该脚直接短到 GND，应读到 0；再短到 3.3 V，应读到 4095 |
+| 某一路读数总是偏小 | 传感器输出阻抗高，239.5 周期采样时间还不够 | 换模块或加运放跟随 |
+| ADC 读数乱跳、`r` 值很大（>100） | 电源纹波 / 没共地 / 面包板电源轨断开 | 万用表量模块 VCC 脚对 MCU GND 的电压 |
+| 串口一个字节都收不到 | TXD/RXD 没交叉接，或 GND 没接 | 把模块 TXD 直接短到 PA10 之外先测回环 |
+| 串口收到乱码 | 波特率不对，或没共地 | 两边都确认 115200-8-N-1 |
+| `[mpu] err=1` | SCL/SDA 接反、地址不对、模块没供电 | 量 PB6/PB7 静态电平，正常应被上拉到 3.3 V |
+| `[oled] err=1` | 地址是 0x3D 而非 0x3C | 改 `SSD1306_ADDR` 再试 |
+| Flash 读回 `FF FF FF` | MISO/MOSI 接反 | 对调 PA6 / PA7 |
+| Flash 初始化卡约 1 秒才超时 | 模块没接，MISO 悬空读 0xFF，BUSY 位恒 1 | 见「D5 SPI Flash」节的遗留隐患说明 |
+| Keil 提示 `No ST-Link detected` | SWDIO/SWCLK 接反或 GND 没接 | 也可试 "Connect under Reset"（需接 RST） |
+| 能下载但程序不跑 | BOOT0 跳线在 1 位 | 跳线帽拨回 0 |
 
 ---
 
